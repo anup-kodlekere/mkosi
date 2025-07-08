@@ -1,9 +1,7 @@
 name: CI
 
 on:
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   unit-test:
@@ -20,12 +18,10 @@ jobs:
           python3 -m pip install --break-system-packages --upgrade setuptools wheel pip
           python3 -m pip install --break-system-packages codespell mypy reuse ruff
           npm install -g pyright
-
       - name: Run ruff check
         run: |
           ruff --version
           ruff check mkosi/ tests/ kernel-install/*.install
-
       - name: Run ruff format
         run: |
           ruff --version
@@ -34,7 +30,6 @@ jobs:
               echo "Please run 'ruff format' on the above files or apply the diffs below manually"
               ruff format --check --quiet --diff mkosi/ tests/ kernel-install/*.install
           fi
-
       - name: Check that tabs are not used in code
         run: sh -c '! git grep -P "\\t" "*.py"'
 
@@ -42,27 +37,22 @@ jobs:
         run: |
           codespell --version
           codespell
-
       - name: License Checking (reuse)
         run: |
           reuse --version
           reuse lint
-
       - name: Type Checking (mypy)
         run: |
           python3 -m mypy --version
           python3 -m mypy mkosi/ tests/ kernel-install/*.install
-
       - name: Type Checking (pyright)
         run: |
           pyright --version
           pyright mkosi/ tests/ kernel-install/*.install
-
       - name: Unit Tests
         run: |
           python3 -m pytest --version
           python3 -m pytest -sv tests/
-
       - name: Test execution from current working directory
         run: python3 -m mkosi -h
 
@@ -76,7 +66,6 @@ jobs:
           testvenv/bin/python3 -m pip install .
           testvenv/bin/mkosi -h
           rm -rf testvenv
-
       - name: Test editable venv installation
         run: |
           python3 -m venv testvenv
@@ -84,26 +73,23 @@ jobs:
           testvenv/bin/python3 -m pip install --editable .
           testvenv/bin/mkosi -h
           rm -rf testvenv
-
       - name: Test zipapp creation
         run: |
           ./tools/generate-zipapp.sh
           ./builddir/mkosi -h
           ./builddir/mkosi documentation
-
       - name: Run shellcheck on scripts
         run: |
           bash -c 'shopt -s globstar; shellcheck bin/mkosi tools/*.sh'
           bin/mkosi completion bash | shellcheck -
-
       - name: Test man page generation
         run: tools/make-man-page.sh
 
   integration-test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     needs: unit-test
     concurrency:
-      group: ${{ github.workflow }}-${{ matrix.distro }}-${{ matrix.tools }}-${{ github.ref }}
+      group: ${{ github.workflow }}-${{ matrix.distro }}-${{ matrix.tools }}-${{ matrix.runner }}-${{ github.ref }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -122,6 +108,8 @@ jobs:
           - fedora
           - opensuse
           - ubuntu
+        runner:
+          - ubuntu-24.04
         exclude:
           # pacman is not packaged in EPEL.
           - distro: arch
@@ -139,6 +127,14 @@ jobs:
             tools: opensuse
           - distro: ubuntu
             tools: opensuse
+        include:
+          # low rate limit on s390x/ppc64le workers, just run two jobs
+          - distro: debian
+            tools: debian
+            runner: ubuntu-24.04-s390x
+          - distro: fedora
+            tools: fedora
+            runner: ubuntu-24.04-ppc64le
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -152,7 +148,6 @@ jobs:
           sudo mv /usr/local /usr/local.trash
           sudo mv /opt/hostedtoolcache /opt/hostedtoolcache.trash
           sudo systemd-run rm -rf /usr/local.trash /opt/hostedtoolcache.trash
-
       # Make sure the latest changes from the pull request are used.
       - name: Install
         run: sudo ln -svf $PWD/bin/mkosi /usr/bin/mkosi
@@ -163,28 +158,22 @@ jobs:
           tee mkosi.local.conf <<EOF
           [Output]
           ManifestFormat=json
-
           [Content]
           KernelCommandLine=systemd.default_device_timeout_sec=180
-
           [Build]
           ToolsTreeDistribution=${{ matrix.tools }}
           Environment=SYSTEMD_REPART_MKFS_OPTIONS_EROFS="--quiet"
-
           [Runtime]
           KVM=yes
           EOF
-
           # TODO: Remove once all distros have recent enough systemd that knows systemd.default_device_timeout_sec.
           mkdir -p mkosi-initrd/mkosi.extra/usr/lib/systemd/system.conf.d
           tee mkosi-initrd/mkosi.extra/usr/lib/systemd/system.conf.d/device-timeout.conf <<EOF
           [Manager]
           DefaultDeviceTimeoutSec=180
           EOF
-
           # TODO: Use $SYSTEMD_REPART_OVERRIDE_FSTYPE_ROOT once we drop support for Ubuntu Noble.
           sed -i 's/return "btrfs"/return "ext4"/' mkosi/distributions/*.py
-
           # fail if the script already exists, to avoid hard to debug CI errors
           [[ -f mkosi.configure ]] && exit 1
           tee mkosi.configure <<EOF
@@ -193,7 +182,6 @@ jobs:
           cat
           EOF
           chmod +x mkosi.configure
-
           # prepare and postinst are already used in CI
           for script in sync build finalize postoutput clean
           do
@@ -204,7 +192,9 @@ jobs:
           TOK
               chmod +x "mkosi.${script}"
           done
-
+          sudo aa-teardown >/dev/null 2>&1 || true
+          sudo sysctl -we kernel.apparmor_restrict_unprivileged_unconfined=0
+          sudo sysctl -we kernel.apparmor_restrict_unprivileged_userns=0
       - name: Generate key
         run: sudo mkosi genkey
 
@@ -212,14 +202,14 @@ jobs:
         run: sudo mkosi summary
 
       - name: Build tools tree
-        run: sudo mkosi -f box -- true
+        run: sudo mkosi -f sandbox -- true
 
       - name: Build image
         run: sudo mkosi --distribution ${{ matrix.distro }} -f
 
       - name: Run integration tests
         run: |
-          sudo mkosi box -- \
+          sudo mkosi sandbox -- \
             timeout -k 30 1h \
             python3 -m pytest \
             --tb=no \

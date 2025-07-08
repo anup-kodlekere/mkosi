@@ -134,7 +134,7 @@ jobs:
             runner: ubuntu-24.04-s390x
           - distro: fedora
             tools: fedora
-            runner: ubuntu-24.04-ppc64le
+            runner: ubuntu-24.04-ppc64le-debug
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

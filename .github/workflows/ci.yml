@@ -132,8 +132,8 @@ jobs:
           - distro: debian
             tools: debian
             runner: ubuntu-24.04-s390x
-          - distro: fedora
-            tools: fedora
+          - distro: debian
+            tools: debian
             runner: ubuntu-24.04-ppc64le
 
     steps:
